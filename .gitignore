@@ -1,0 +1,28 @@
+# Arquivos compilados e executáveis
+*.o
+*.out
+*.exe
+mandelbrot_serial
+mandelbrot_omp
+mandelbrot_mpi
+mandelbrot_cuda
+
+# Diretórios e arquivos de saída de dados (p/ não estourar o limite do Git)
+saida/
+*.bin
+*.pgm
+*.ppm
+*.png
+*.jpg
+
+# Logs e arquivos de profiling
+*.log
+gmon.out
+*.nvprof
+
+# Arquivos temporários do Sistema Operacional e IDEs
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
