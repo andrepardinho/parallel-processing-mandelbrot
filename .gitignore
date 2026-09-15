@@ -6,6 +6,7 @@ mandelbrot_serial
 mandelbrot_omp
 mandelbrot_mpi
 mandelbrot_cuda
+mandelbrot
 
 # Diretórios e arquivos de saída de dados (p/ não estourar o limite do Git)
 saida/
