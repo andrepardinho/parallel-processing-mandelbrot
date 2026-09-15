@@ -1,7 +1,10 @@
+#define _POSIX_C_SOURCE 199309L
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <time.h>
+#include <math.h>
 
 /** 
  * Calcula o conjunto de Mandelbrot para uma região específica do plano complexo.
@@ -64,6 +67,24 @@ void salvar_binario(const char *arquivo, int32_t *count, int width, int height) 
     fclose(f_bin);
 }
 
+static void mapa_de_cor(int iter, int max_iter, unsigned char *r, unsigned char *g, unsigned char *b) {
+    if (iter >= max_iter) {
+        *r = 11; *g = 29; *b = 58;
+        return;
+    }
+
+    // Normalização cores fundo
+    double t = log(1.0 + iter) / log(1.0 + max_iter);
+
+    //double t = (double)iter / max_iter;
+    double um_menos_t = 1.0 - t;
+    double rd = 9.0 * um_menos_t * t * t * t;
+    double gd = 15.0 * um_menos_t * um_menos_t * t * t;
+    double bd = 8.5 * um_menos_t * um_menos_t * um_menos_t * t;
+    *r = (unsigned char)(255.0 * rd);
+    *g = (unsigned char)(255.0 * gd);
+    *b = (unsigned char)(255.0 * bd);
+}
 
 void salvar_imagem_ppm(const char *arquivo, int32_t *count, int width, int height, int max_iter) {
     FILE *f_ppm = fopen(arquivo, "wb");
@@ -74,10 +95,11 @@ void salvar_imagem_ppm(const char *arquivo, int32_t *count, int width, int heigh
     fprintf(f_ppm, "P6\n%d %d\n255\n", width, height);
     size_t n = (size_t)width * height;
     for (size_t i = 0; i < n; i++) {
-        unsigned char color = (unsigned char)(255 * count[i] / max_iter);
-        fputc(color, f_ppm); // Red
-        fputc(color, f_ppm); // Green
-        fputc(color, f_ppm); // Blue
+        unsigned char r, g, b;
+        mapa_de_cor(count[i], max_iter, &r, &g, &b);
+        fputc(r, f_ppm);
+        fputc(g, f_ppm);
+        fputc(b, f_ppm);
     }
     fclose(f_ppm);
 }
