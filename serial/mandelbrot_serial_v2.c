@@ -78,8 +78,12 @@ static void mapa_de_cor(int iter, int max_iter, unsigned char *r, unsigned char 
     }
 
     // Normalização cores fundo
-    double t = log(1.0 + iter) / log(1.0 + max_iter);
-    //double t = (double)(iter % 256) / 256.0;
+    
+    // Visual mais interessante para vista completa e menos interessante para cavalos marinhos:
+    //double t = log(1.0 + iter) / log(1.0 + max_iter);
+    
+    // Visual mais interessante para cavalos marinhos e menos interessante para vista completa:
+    double t = (double)(iter % 256) / 256.0;
 
     double um_menos_t = 1.0 - t;
     double rd = 9.0 * um_menos_t * t * t * t;

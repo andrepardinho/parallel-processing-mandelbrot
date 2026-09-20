@@ -1,0 +1,65 @@
+VALIDAR RESULTADOS:
+    
+- Compara os binarios
+- gera a referência serial e compara com algumas execuções OpenMP
+
+python3 scripts/validar_bin.py \
+    serial/saida/mandelbrot_vista_completa_4096.bin \
+    openmp/saida/mandelbrot_vista_completa_4096.bin
+
+BENCHMARKS:
+Ajustar a quantidade de threads conforme PC
+- Esse exemplo tá ajustado para 12 threads
+
+== Strong Scaling (25 resultdos):
+
+python3 scripts/benchmark_omp.py \
+    --exe ./openmp/mandelbrot_omp \
+    --cwd ./openmp \
+    --threads 1 2 4 8 12 \
+    --schedules static \
+    --chunks 1 \
+    --cases padrao \
+    --resolutions 4096 \
+    --repeats 5 \
+    --output resultados/brutos/strong_scaling.csv
+
+== Schedules (15 resultados):
+
+python3 scripts/benchmark_omp.py \
+    --exe ./openmp/mandelbrot_omp \
+    --cwd ./openmp \
+    --threads 12 \
+    --schedules static dynamic guided \
+    --chunks 1 \
+    --cases cavalos \
+    --resolutions 4096 \
+    --repeats 5 \
+    --output resultados/brutos/schedules.csv
+
+== Efeito do chunks (60 resultados):
+
+python3 scripts/benchmark_omp.py \
+    --exe ./openmp/mandelbrot_omp \
+    --cwd ./openmp \
+    --threads 12 \
+    --schedules static dynamic guided \
+    --chunks 1 16 64 256 \
+    --cases cavalos \
+    --resolutions 4096 \
+    --repeats 5 \
+    --output resultados/brutos/chunks.csv
+
+
+== Weak Scaling (45 resultados):
+
+python3 scripts/benchmark_omp.py \
+    --exe ./openmp/mandelbrot_omp \
+    --cwd ./openmp \
+    --threads 1 4 12 \
+    --schedules static \
+    --chunks 1 \
+    --cases padrao \
+    --resolutions 4096 8192 16384 \
+    --repeats 5 \
+    --output resultados/brutos/weak_scaling.csv
