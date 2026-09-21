@@ -238,6 +238,11 @@ int main(int argc, char *argv[]) {
 
     // Cria a pasta de saída.
     const char *pasta_saida = "saida";
+    
+    //para windows:
+    //mkdir(pasta_saida);
+    
+    //para linux
     mkdir(pasta_saida, 0777);
 
     // Medição do cálculo

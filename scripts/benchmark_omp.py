@@ -54,6 +54,7 @@ import argparse
 import csv
 import os
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -114,7 +115,13 @@ CSV_FIELDS = [
     "chunk_configurado",
     "chunk_utilizado",
     "repeticao",
+    "tempo_serial_s",
     "tempo_calc_s",
+    "speedup",
+    "diferenca_percentual",
+    "pixels_diferentes",
+    "percentual_erro",
+    "diferenca_maxima",
     "tempo_io_s",
     "tempo_total_s",
     "t_min_s",
@@ -264,6 +271,108 @@ def executar(
 
     return resultado, saida, stderr
 
+def executar_serial(
+    executavel,
+    caso,
+    resolucao,
+    cwd,
+    timeout,
+):
+    comando = [
+        str(executavel),
+        caso,
+        str(resolucao),
+    ]
+
+    inicio = datetime.now()
+
+    processo = subprocess.run(
+        comando,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+    saida = processo.stdout
+    stderr = processo.stderr
+
+    if processo.returncode != 0:
+        raise RuntimeError(
+            "O programa serial terminou com erro.\n"
+            f"Comando: {' '.join(comando)}\n"
+            f"Codigo de saida: {processo.returncode}\n"
+            f"STDOUT:\n{saida}\n"
+            f"STDERR:\n{stderr}"
+        )
+
+    tempo_calc = parse_float(
+        RE_TEMPO_CALC,
+        saida,
+        "Tempo de calculo",
+    )
+
+    return tempo_calc, saida, stderr
+
+def comparar_binarios(arquivo_a, arquivo_b):
+    if not arquivo_a.is_file():
+        raise FileNotFoundError(
+            f"Arquivo serial nao encontrado: {arquivo_a}"
+        )
+
+    if not arquivo_b.is_file():
+        raise FileNotFoundError(
+            f"Arquivo OpenMP nao encontrado: {arquivo_b}"
+        )
+
+    tamanho_a = arquivo_a.stat().st_size
+    tamanho_b = arquivo_b.stat().st_size
+
+    if tamanho_a != tamanho_b:
+        raise ValueError(
+            "Os arquivos binarios possuem tamanhos diferentes."
+        )
+
+    if tamanho_a % 4 != 0:
+        raise ValueError(
+            "O tamanho dos arquivos nao e multiplo de 4 bytes."
+        )
+
+    total_pixels = tamanho_a // 4
+
+    diferentes = 0
+    max_diferenca = 0
+
+    with arquivo_a.open("rb") as fa, arquivo_b.open("rb") as fb:
+        while True:
+            dados_a = fa.read(4 * 1_000_000)
+            dados_b = fb.read(4 * 1_000_000)
+
+            if not dados_a and not dados_b:
+                break
+
+            valores_a = memoryview(dados_a).cast("i")
+            valores_b = memoryview(dados_b).cast("i")
+
+            for valor_a, valor_b in zip(valores_a, valores_b):
+                if valor_a != valor_b:
+                    diferentes += 1
+
+                    diferenca = abs(valor_a - valor_b)
+
+                    if diferenca > max_diferenca:
+                        max_diferenca = diferenca
+
+            valores_a.release()
+            valores_b.release()
+
+            percentual_erro = (
+                (diferentes / total_pixels) * 100
+                if total_pixels > 0
+                else 0.0
+            )
+
+            return diferentes, percentual_erro, max_diferenca
 
 def quantidade_execucoes(cases, resolutions, threads, schedules, chunks, repeats):
     return (
@@ -286,6 +395,13 @@ def main():
         type=Path,
         default=Path("./mandelbrot_omp"),
         help="Caminho para o executavel OpenMP.",
+    )
+
+    parser.add_argument(
+        "--serial-exe",
+        type=Path,
+        default=Path("./mandelbrot_serial"),
+        help="Caminho para o executavel serial.",
     )
 
     parser.add_argument(
@@ -338,7 +454,7 @@ def main():
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("resultados/brutos/omp.csv"),
+        default=Path("openmp/resultados/brutos/omp.csv"),
         help="Arquivo CSV de saida.",
     )
 
@@ -470,6 +586,33 @@ def main():
 
         for caso in args.cases:
             for resolucao in args.resolutions:
+                
+                """
+                Esse trecho de código específico entre é para
+                executar a versão serial de determinado 'teste base', isto é, com
+                os mesmos tipos de caso e resolucao (já que a versao serial nao tem 
+                configuracoes de threads ou schedules, entao nao tem porque fazer uma versao serial
+                pra cada um dos varios testes paralelos), e utiliza-los como medida pra
+                verificar tanto a corretude de cada um dos testes paralelos a seguir 
+                quanto o speedup em relacao a versao serial
+                """
+                tempo_serial, _, _ = executar_serial(
+                    executavel=args.serial_exe.resolve(),
+                    caso=caso,
+                    resolucao=resolucao,
+                    cwd=Path("./serial"),
+                    timeout=args.timeout,
+                )
+
+                
+
+                print(
+                    f"\nReferencia serial: "
+                    f"{caso} | "
+                    f"{resolucao}x{resolucao} | "
+                    f"Tempo calculo: {tempo_serial:.6f} s"
+                )
+
                 for threads in args.threads:
                     for schedule in args.schedules:
                         for chunk in args.chunks:
@@ -486,6 +629,15 @@ def main():
                                     f"repeticao {repeticao}"
                                 )
 
+                                arquivo_openmp = (
+                                    cwd
+                                    / "saida"
+                                    / f"mandelbrot_vista_completa_{resolucao}.bin"
+                                )
+
+                                if arquivo_openmp.exists():
+                                    arquivo_openmp.unlink()
+
                                 try:
                                     resultado, stdout, stderr = executar(
                                         executavel=executavel,
@@ -498,6 +650,39 @@ def main():
                                         cwd=cwd,
                                         timeout=args.timeout,
                                     )
+
+                                    resultado["tempo_serial_s"] = tempo_serial
+                                    resultado["speedup"] = tempo_serial / resultado["tempo_calc_s"]
+
+                                    resultado["diferenca_percentual"] = (
+                                        (resultado["tempo_calc_s"] - tempo_serial)
+                                        / tempo_serial
+                                    ) * 100
+
+                                    arquivo_serial = (
+                                        Path("./serial")
+                                        / "saida"
+                                        / f"mandelbrot_vista_completa_{resolucao}.bin"
+                                    )
+
+                                    arquivo_openmp = (
+                                        cwd
+                                        / "saida"
+                                        / f"mandelbrot_vista_completa_{resolucao}.bin"
+                                    )
+
+                                    (
+                                        pixels_diferentes,
+                                        percentual_erro,
+                                        diferenca_maxima,
+                                    ) = comparar_binarios(
+                                        arquivo_serial,
+                                        arquivo_openmp,
+                                    )
+
+                                    resultado["pixels_diferentes"] = pixels_diferentes
+                                    resultado["percentual_erro"] = percentual_erro
+                                    resultado["diferenca_maxima"] = diferenca_maxima
                                 except (
                                     OSError,
                                     subprocess.TimeoutExpired,
