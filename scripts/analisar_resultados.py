@@ -214,10 +214,30 @@ def titulo_base(rows: list[dict]) -> str:
 
 
 def salvar_figura(path: Path):
+    fig = plt.gcf()
+    ax = fig.gca()
+
+    # --- Ajusta largura conforme o título ---
+    titulo = ax.get_title()
+    if titulo:
+        linhas = titulo.split("\n")
+        maior_linha = max(len(l) for l in linhas)
+        # ~0.12 polegadas por caractere + margem mínima
+        largura_minima = max(6.4, maior_linha * 0.12)
+        altura_atual = fig.get_size_inches()[1]
+        fig.set_size_inches(largura_minima, altura_atual)
+
+    # --- Ajusta altura conforme número de linhas do título ---
+    if titulo and "\n" in titulo:
+        n_linhas = titulo.count("\n") + 1
+        altura_minima = 4.8 + (n_linhas - 1) * 0.4
+        largura_atual = fig.get_size_inches()[0]
+        fig.set_size_inches(largura_atual, altura_minima)
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    plt.tight_layout()
-    plt.savefig(path, dpi=160)
-    plt.close()
+    fig.tight_layout()
+    fig.savefig(path, dpi=160, bbox_inches="tight")  # <- chave!
+    plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
