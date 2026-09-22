@@ -314,6 +314,15 @@ def executar_serial(
 
     return tempo_calc, saida, stderr
 
+def nome_arquivo_saida(caso, resolucao):
+    if caso == "padrao":
+        return f"mandelbrot_vista_completa_{resolucao}.bin"
+
+    if caso == "cavalos":
+        return f"mandelbrot_cavalos_marinhos_{resolucao}.bin"
+
+    raise ValueError(f"Caso desconhecido: {caso}")
+
 def comparar_binarios(arquivo_a, arquivo_b):
     if not arquivo_a.is_file():
         raise FileNotFoundError(
@@ -632,7 +641,7 @@ def main():
                                 arquivo_openmp = (
                                     cwd
                                     / "saida"
-                                    / f"mandelbrot_vista_completa_{resolucao}.bin"
+                                    / nome_arquivo_saida(caso, resolucao)
                                 )
 
                                 if arquivo_openmp.exists():
@@ -662,13 +671,13 @@ def main():
                                     arquivo_serial = (
                                         Path("./serial")
                                         / "saida"
-                                        / f"mandelbrot_vista_completa_{resolucao}.bin"
+                                        / nome_arquivo_saida(caso, resolucao)
                                     )
 
                                     arquivo_openmp = (
                                         cwd
                                         / "saida"
-                                        / f"mandelbrot_vista_completa_{resolucao}.bin"
+                                        / nome_arquivo_saida(caso, resolucao)
                                     )
 
                                     (
