@@ -1,750 +1,293 @@
 #!/usr/bin/env python3
+"""Benchmark OpenMP usando referencias seriais persistentes.
+
+Execute a partir da raiz do projeto. Antes, gere as referencias com gerar_referencias.py.
+
+Exemplo:
+    python3 benchmark_omp.py \
+        --exe ./openmp/mandelbrot_omp --cwd ./openmp \
+        --references-dir ./referencias \
+        --threads 1 2 4 8 --schedules static --chunks 1 \
+        --cases padrao --resolutions 4096 --repeats 5 \
+        --output resultados/brutos/omp.csv
 """
-Automatiza os experimentos da versao OpenMP de Mandelbrot.
 
-O script:
-- define OMP_NUM_THREADS e OMP_SCHEDULE;
-- executa o programa varias vezes;
-- captura os tempos e o F_LB impressos pelo mandelbrot_omp;
-- grava uma linha por execucao em CSV.
-
-Exemplo simples:
-    python3 benchmark_omp.py \
-        --threads 1 2 4 8 \
-        --schedules static \
-        --chunks 1 \
-        --cases padrao \
-        --resolutions 4096 \
-        --repeats 5
-
-Strong scaling:
-    python3 benchmark_omp.py \
-        --threads 1 2 4 8 \
-        --schedules static \
-        --chunks 1 \
-        --cases padrao \
-        --resolutions 4096 \
-        --repeats 5 \
-        --output resultados/brutos/strong_scaling.csv
-
-Comparacao de schedules/chunks no caso de desbalanceamento:
-    python3 benchmark_omp.py \
-        --threads 8 \
-        --schedules static dynamic guided \
-        --chunks 1 16 64 256 \
-        --cases cavalos \
-        --resolutions 4096 \
-        --repeats 5 \
-        --output resultados/brutos/scheduling_cavalos.csv
-
-Weak scaling (ajuste as threads conforme o hardware):
-    python3 benchmark_omp.py \
-        --threads 1 4 16 \
-        --schedules static \
-        --chunks 1 \
-        --cases padrao \
-        --resolutions 4096 8192 16384 \
-        --repeats 5 \
-        --output resultados/brutos/weak_scaling.csv
-
-Use --dry-run para conferir a quantidade de execucoes antes de iniciar.
-"""
+from __future__ import annotations
 
 import argparse
 import csv
 import os
 import re
-import shutil
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
-
-RE_TEMPO_CALC = re.compile(
-    r"Tempo de calculo:\s*([0-9]+(?:\.[0-9]+)?)\s*s"
+from referencias_mandelbrot import (
+    carregar_manifesto,
+    comparar_binarios,
+    nome_arquivo_binario,
+    obter_referencia,
 )
 
-RE_TEMPO_IO = re.compile(
-    r"Tempo de I/O:\s*([0-9]+(?:\.[0-9]+)?)\s*s"
-)
+RE_TEMPO_CALC = re.compile(r"Tempo de calculo:\s*([0-9]+(?:\.[0-9]+)?)\s*s")
+RE_TEMPO_IO = re.compile(r"Tempo de I/O:\s*([0-9]+(?:\.[0-9]+)?)\s*s")
+RE_TEMPO_TOTAL = re.compile(r"Tempo total:\s*([0-9]+(?:\.[0-9]+)?)\s*s")
+RE_THREADS = re.compile(r"Threads utilizadas:\s*(\d+)")
+RE_SCHEDULE = re.compile(r"Schedule:\s*([A-Za-z]+)")
+RE_CHUNK = re.compile(r"Chunk:\s*(\d+|padrao)")
+RE_TMIN = re.compile(r"T_min:\s*([0-9]+(?:\.[0-9]+)?)\s*s")
+RE_TMAX = re.compile(r"T_max:\s*([0-9]+(?:\.[0-9]+)?)\s*s")
+RE_FLB = re.compile(r"Fator F_LB:\s*([0-9]+(?:\.[0-9]+)?)")
+RE_MAX_ITER = re.compile(r"MAX_ITER:\s*(\d+)")
 
-RE_TEMPO_TOTAL = re.compile(
-    r"Tempo total:\s*([0-9]+(?:\.[0-9]+)?)\s*s"
-)
-
-RE_THREADS = re.compile(
-    r"Threads utilizadas:\s*(\d+)"
-)
-
-RE_SCHEDULE = re.compile(
-    r"Schedule:\s*([A-Za-z]+)"
-)
-
-RE_CHUNK = re.compile(
-    r"Chunk:\s*(\d+|padrao)"
-)
-
-RE_TMIN = re.compile(
-    r"T_min:\s*([0-9]+(?:\.[0-9]+)?)\s*s"
-)
-
-RE_TMAX = re.compile(
-    r"T_max:\s*([0-9]+(?:\.[0-9]+)?)\s*s"
-)
-
-RE_FLB = re.compile(
-    r"Fator F_LB:\s*([0-9]+(?:\.[0-9]+)?)"
-)
-
-RE_MAX_ITER = re.compile(
-    r"MAX_ITER:\s*(\d+)"
-)
-
-
+# As primeiras colunas mantem compatibilidade com analisar_resultados.py.
 CSV_FIELDS = [
-    "data_hora",
-    "executavel",
-    "caso",
-    "resolucao",
-    "max_iter",
-    "threads_solicitadas",
-    "threads_utilizadas",
-    "schedule_configurado",
-    "schedule_utilizado",
-    "chunk_configurado",
-    "chunk_utilizado",
-    "repeticao",
-    "tempo_serial_s",
-    "tempo_calc_s",
-    "speedup",
-    "diferenca_percentual",
-    "pixels_diferentes",
-    "percentual_erro",
-    "diferenca_maxima",
-    "tempo_io_s",
-    "tempo_total_s",
-    "t_min_s",
-    "t_max_s",
-    "f_lb",
-    "returncode",
+    "data_hora", "executavel", "caso", "resolucao", "max_iter",
+    "threads_solicitadas", "threads_utilizadas", "schedule_configurado",
+    "schedule_utilizado", "chunk_configurado", "chunk_utilizado", "repeticao",
+    "tempo_serial_s", "tempo_serial_min_s", "tempo_serial_max_s",
+    "speedup", "diferenca_percentual", "pixels_diferentes", "percentual_erro",
+    "diferenca_maxima", "correto_exato", "referencia_binario", "tempo_calc_s",
+    "tempo_io_s", "tempo_total_s", "t_min_s", "t_max_s", "f_lb", "returncode",
 ]
 
 
-def parse_float(pattern, text, field):
-    match = pattern.search(text)
+def parse_float(pattern, texto, campo):
+    match = pattern.search(texto)
     if not match:
-        raise ValueError(f"Nao foi possivel encontrar '{field}' na saida.")
+        raise ValueError(f"Nao foi possivel encontrar '{campo}' na saida OpenMP.\n{texto}")
     return float(match.group(1))
 
 
-def parse_int(pattern, text, field):
-    match = pattern.search(text)
+def parse_int(pattern, texto, campo):
+    match = pattern.search(texto)
     if not match:
-        raise ValueError(f"Nao foi possivel encontrar '{field}' na saida.")
+        raise ValueError(f"Nao foi possivel encontrar '{campo}' na saida OpenMP.\n{texto}")
     return int(match.group(1))
 
 
-def parse_text(pattern, text, field):
-    match = pattern.search(text)
+def parse_text(pattern, texto, campo):
+    match = pattern.search(texto)
     if not match:
-        raise ValueError(f"Nao foi possivel encontrar '{field}' na saida.")
+        raise ValueError(f"Nao foi possivel encontrar '{campo}' na saida OpenMP.\n{texto}")
     return match.group(1)
 
 
-def parse_chunk(text):
-    match = RE_CHUNK.search(text)
-
+def parse_chunk(texto):
+    match = RE_CHUNK.search(texto)
     if not match:
-        raise ValueError("Nao foi possivel encontrar 'Chunk' na saida.")
-
-    valor = match.group(1)
-
-    if valor == "padrao":
-        return 0
-
-    return int(valor)
+        raise ValueError(f"Nao foi possivel encontrar 'Chunk' na saida OpenMP.\n{texto}")
+    return 0 if match.group(1) == "padrao" else int(match.group(1))
 
 
-def executar(
-    executavel,
-    caso,
-    resolucao,
-    threads,
-    schedule,
-    chunk,
-    repeticao,
-    cwd,
-    timeout,
-):
+def executar_openmp(executavel, caso, resolucao, threads, schedule, chunk, repeticao, cwd, timeout):
     ambiente = os.environ.copy()
-
-    # Evita que a biblioteca OpenMP altere dinamicamente o numero
-    # de threads solicitado durante o benchmark.
     ambiente["OMP_NUM_THREADS"] = str(threads)
     ambiente["OMP_DYNAMIC"] = "FALSE"
-
     ambiente["OMP_SCHEDULE"] = f"{schedule},{chunk}"
 
-    comando = [
-        str(executavel),
-        caso,
-        str(resolucao),
-    ]
-
-    inicio = datetime.now()
-
+    comando = [str(executavel), caso, str(resolucao)]
+    inicio = datetime.now().astimezone().isoformat(timespec="seconds")
     processo = subprocess.run(
-        comando,
-        cwd=cwd,
-        env=ambiente,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
+        comando, cwd=cwd, env=ambiente, capture_output=True, text=True, timeout=timeout
     )
-
-    saida = processo.stdout
-    stderr = processo.stderr
-
+    saida, stderr = processo.stdout, processo.stderr
     if processo.returncode != 0:
         raise RuntimeError(
-            "O programa terminou com erro.\n"
-            f"Comando: {' '.join(comando)}\n"
-            f"Codigo de saida: {processo.returncode}\n"
-            f"STDOUT:\n{saida}\n"
-            f"STDERR:\n{stderr}"
+            "A execucao OpenMP terminou com erro.\n"
+            f"Comando: {' '.join(comando)}\nCodigo: {processo.returncode}\n"
+            f"STDOUT:\n{saida}\nSTDERR:\n{stderr}"
         )
 
+    max_iter = parse_int(RE_MAX_ITER, saida, "MAX_ITER")
     resultado = {
-        "data_hora": inicio.isoformat(timespec="seconds"),
+        "data_hora": inicio,
         "executavel": str(executavel),
         "caso": caso,
         "resolucao": resolucao,
-        "max_iter": parse_int(RE_MAX_ITER, saida, "MAX_ITER"),
+        "max_iter": max_iter,
         "threads_solicitadas": threads,
-        "threads_utilizadas": parse_int(
-            RE_THREADS,
-            saida,
-            "Threads utilizadas",
-        ),
+        "threads_utilizadas": parse_int(RE_THREADS, saida, "Threads utilizadas"),
         "schedule_configurado": schedule,
-        "schedule_utilizado": parse_text(
-            RE_SCHEDULE,
-            saida,
-            "Schedule",
-        ),
+        "schedule_utilizado": parse_text(RE_SCHEDULE, saida, "Schedule"),
         "chunk_configurado": chunk,
         "chunk_utilizado": parse_chunk(saida),
         "repeticao": repeticao,
-        "tempo_calc_s": parse_float(
-            RE_TEMPO_CALC,
-            saida,
-            "Tempo de calculo",
-        ),
-        "tempo_io_s": parse_float(
-            RE_TEMPO_IO,
-            saida,
-            "Tempo de I/O",
-        ),
-        "tempo_total_s": parse_float(
-            RE_TEMPO_TOTAL,
-            saida,
-            "Tempo total",
-        ),
-        "t_min_s": parse_float(
-            RE_TMIN,
-            saida,
-            "T_min",
-        ),
-        "t_max_s": parse_float(
-            RE_TMAX,
-            saida,
-            "T_max",
-        ),
-        "f_lb": parse_float(
-            RE_FLB,
-            saida,
-            "Fator F_LB",
-        ),
+        "tempo_calc_s": parse_float(RE_TEMPO_CALC, saida, "Tempo de calculo"),
+        "tempo_io_s": parse_float(RE_TEMPO_IO, saida, "Tempo de I/O"),
+        "tempo_total_s": parse_float(RE_TEMPO_TOTAL, saida, "Tempo total"),
+        "t_min_s": parse_float(RE_TMIN, saida, "T_min"),
+        "t_max_s": parse_float(RE_TMAX, saida, "T_max"),
+        "f_lb": parse_float(RE_FLB, saida, "Fator F_LB"),
         "returncode": processo.returncode,
     }
-
     return resultado, saida, stderr
 
-def executar_serial(
-    executavel,
-    caso,
-    resolucao,
-    cwd,
-    timeout,
-):
-    comando = [
-        str(executavel),
-        caso,
-        str(resolucao),
-    ]
 
-    inicio = datetime.now()
+def quantidade_execucoes(casos, resolucoes, threads, schedules, chunks, repeticoes):
+    return len(casos) * len(resolucoes) * len(threads) * len(schedules) * len(chunks) * repeticoes
 
-    processo = subprocess.run(
-        comando,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
 
-    saida = processo.stdout
-    stderr = processo.stderr
-
-    if processo.returncode != 0:
-        raise RuntimeError(
-            "O programa serial terminou com erro.\n"
-            f"Comando: {' '.join(comando)}\n"
-            f"Codigo de saida: {processo.returncode}\n"
-            f"STDOUT:\n{saida}\n"
-            f"STDERR:\n{stderr}"
-        )
-
-    tempo_calc = parse_float(
-        RE_TEMPO_CALC,
-        saida,
-        "Tempo de calculo",
-    )
-
-    return tempo_calc, saida, stderr
-
-def nome_arquivo_saida(caso, resolucao):
-    if caso == "padrao":
-        return f"mandelbrot_vista_completa_{resolucao}.bin"
-
-    if caso == "cavalos":
-        return f"mandelbrot_cavalos_marinhos_{resolucao}.bin"
-
-    raise ValueError(f"Caso desconhecido: {caso}")
-
-def comparar_binarios(arquivo_a, arquivo_b):
-    if not arquivo_a.is_file():
-        raise FileNotFoundError(
-            f"Arquivo serial nao encontrado: {arquivo_a}"
-        )
-
-    if not arquivo_b.is_file():
-        raise FileNotFoundError(
-            f"Arquivo OpenMP nao encontrado: {arquivo_b}"
-        )
-
-    tamanho_a = arquivo_a.stat().st_size
-    tamanho_b = arquivo_b.stat().st_size
-
-    if tamanho_a != tamanho_b:
-        raise ValueError(
-            "Os arquivos binarios possuem tamanhos diferentes."
-        )
-
-    if tamanho_a % 4 != 0:
-        raise ValueError(
-            "O tamanho dos arquivos nao e multiplo de 4 bytes."
-        )
-
-    total_pixels = tamanho_a // 4
-
-    diferentes = 0
-    max_diferenca = 0
-
-    with arquivo_a.open("rb") as fa, arquivo_b.open("rb") as fb:
-        while True:
-            dados_a = fa.read(4 * 1_000_000)
-            dados_b = fb.read(4 * 1_000_000)
-
-            if not dados_a and not dados_b:
-                break
-
-            valores_a = memoryview(dados_a).cast("i")
-            valores_b = memoryview(dados_b).cast("i")
-
-            for valor_a, valor_b in zip(valores_a, valores_b):
-                if valor_a != valor_b:
-                    diferentes += 1
-
-                    diferenca = abs(valor_a - valor_b)
-
-                    if diferenca > max_diferenca:
-                        max_diferenca = diferenca
-
-            valores_a.release()
-            valores_b.release()
-
-            percentual_erro = (
-                (diferentes / total_pixels) * 100
-                if total_pixels > 0
-                else 0.0
+def validar_csv_existente(path: Path):
+    if path.exists() and path.stat().st_size > 0:
+        with path.open("r", newline="", encoding="utf-8") as f:
+            cabecalho = next(csv.reader(f), [])
+        if cabecalho != CSV_FIELDS:
+            raise ValueError(
+                f"O CSV existente {path} tem um cabecalho de outra versao. "
+                "Use outro --output ou mova/remova o CSV antigo antes de continuar."
             )
-
-            return diferentes, percentual_erro, max_diferenca
-
-def quantidade_execucoes(cases, resolutions, threads, schedules, chunks, repeats):
-    return (
-        len(cases)
-        * len(resolutions)
-        * len(threads)
-        * len(schedules)
-        * len(chunks)
-        * repeats
-    )
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Automatiza benchmarks OpenMP do Mandelbrot."
-    )
-
-    parser.add_argument(
-        "--exe",
-        type=Path,
-        default=Path("./mandelbrot_omp"),
-        help="Caminho para o executavel OpenMP.",
-    )
-
-    parser.add_argument(
-        "--serial-exe",
-        type=Path,
-        default=Path("./mandelbrot_serial"),
-        help="Caminho para o executavel serial.",
-    )
-
-    parser.add_argument(
-        "--cases",
-        nargs="+",
-        choices=["padrao", "cavalos"],
-        default=["padrao"],
-        help="Casos a executar.",
-    )
-
-    parser.add_argument(
-        "--resolutions",
-        nargs="+",
-        type=int,
-        default=[4096],
-        help="Resolucao(s) quadrada(s).",
-    )
-
-    parser.add_argument(
-        "--threads",
-        nargs="+",
-        type=int,
-        default=[1, 2, 4, 8],
-        help="Numero de threads a testar.",
-    )
-
-    parser.add_argument(
-        "--schedules",
-        nargs="+",
-        choices=["static", "dynamic", "guided"],
-        default=["static"],
-        help="Politicas de escalonamento.",
-    )
-
-    parser.add_argument(
-        "--chunks",
-        nargs="+",
-        type=int,
-        default=[1],
-        help="Tamanhos de chunk.",
-    )
-
-    parser.add_argument(
-        "--repeats",
-        type=int,
-        default=5,
-        help="Quantidade de repeticoes por configuracao.",
-    )
-
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("openmp/resultados/brutos/omp.csv"),
-        help="Arquivo CSV de saida.",
-    )
-
-    parser.add_argument(
-        "--cwd",
-        type=Path,
-        default=Path("."),
-        help="Diretorio de trabalho do executavel.",
-    )
-
-    parser.add_argument(
-        "--timeout",
-        type=float,
-        default=3600.0,
-        help="Tempo maximo de cada execucao, em segundos.",
-    )
-
-    parser.add_argument(
-        "--logs-dir",
-        type=Path,
-        default=None,
-        help="Diretorio opcional para salvar stdout/stderr de cada execucao.",
-    )
-
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Apenas mostra as configuracoes, sem executar.",
-    )
-
+    parser = argparse.ArgumentParser(description="Benchmark OpenMP usando referencia serial compartilhada.")
+    parser.add_argument("--exe", type=Path, default=Path("./openmp/mandelbrot_omp"), help="Executavel OpenMP.")
+    parser.add_argument("--cwd", type=Path, default=Path("./openmp"), help="Diretorio de trabalho do executavel.")
+    parser.add_argument("--references-dir", type=Path, default=Path("./referencias"), help="Diretorio gerado por gerar_referencias.py.")
+    parser.add_argument("--cases", nargs="+", choices=["padrao", "cavalos"], default=["padrao"])
+    parser.add_argument("--resolutions", nargs="+", type=int, default=[4096])
+    parser.add_argument("--threads", nargs="+", type=int, default=[1, 2, 4, 8])
+    parser.add_argument("--schedules", nargs="+", choices=["static", "dynamic", "guided"], default=["static"])
+    parser.add_argument("--chunks", nargs="+", type=int, default=[1])
+    parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--output", type=Path, default=Path("resultados/brutos/omp.csv"))
+    parser.add_argument("--timeout", type=float, default=3600.0)
+    parser.add_argument("--logs-dir", type=Path, default=None)
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    if args.repeats <= 0:
-        parser.error("--repeats deve ser > 0.")
+    if args.repeats <= 0 or args.timeout <= 0:
+        parser.error("--repeats e --timeout devem ser positivos.")
+    if any(x <= 0 for x in args.resolutions + args.threads + args.chunks):
+        parser.error("Resolucao, threads e chunks devem ser positivos.")
 
-    if any(value <= 0 for value in args.resolutions):
-        parser.error("Todas as resolucoes devem ser > 0.")
-
-    if any(value <= 0 for value in args.threads):
-        parser.error("Todas as quantidades de threads devem ser > 0.")
-
-    if any(value <= 0 for value in args.chunks):
-        parser.error("Todos os chunks devem ser > 0.")
-
-    if args.timeout <= 0:
-        parser.error("--timeout deve ser > 0.")
-
-    executavel = args.exe
-    if not executavel.is_absolute():
-        executavel = (Path.cwd() / executavel).resolve()
-
-    cwd = args.cwd
-    if not cwd.is_absolute():
-        cwd = (Path.cwd() / cwd).resolve()
+    executavel = args.exe.expanduser().resolve()
+    cwd = args.cwd.expanduser().resolve()
+    references_dir = args.references_dir.expanduser().resolve()
+    output = args.output.expanduser().resolve()
+    logs_dir = args.logs_dir.expanduser().resolve() if args.logs_dir else None
 
     if not executavel.is_file():
-        parser.error(f"Executavel nao encontrado: {executavel}")
-
+        parser.error(f"Executavel OpenMP nao encontrado: {executavel}")
     if not cwd.is_dir():
-        parser.error(f"Diretorio de trabalho nao encontrado: {cwd}")
+        parser.error(f"Diretorio de trabalho OpenMP nao encontrado: {cwd}")
 
-    total = quantidade_execucoes(
-        args.cases,
-        args.resolutions,
-        args.threads,
-        args.schedules,
-        args.chunks,
-        args.repeats,
-    )
-
-    print("========================================")
-    print("        BENCHMARK OPENMP")
-    print("========================================")
-    print(f"Executavel:   {executavel}")
-    print(f"Diretorio:    {cwd}")
-    print(f"Casos:        {', '.join(args.cases)}")
-    print(f"Resolucao:    {args.resolutions}")
-    print(f"Threads:      {args.threads}")
-    print(f"Schedules:    {', '.join(args.schedules)}")
-    print(f"Chunks:       {args.chunks}")
-    print(f"Repeticoes:   {args.repeats}")
-    print(f"Total de execucoes: {total}")
-    print("========================================")
+    total = quantidade_execucoes(args.cases, args.resolutions, args.threads, args.schedules, args.chunks, args.repeats)
+    print("=============== BENCHMARK OPENMP ===============")
+    print(f"Executavel: {executavel}")
+    print(f"Diretorio: {cwd}")
+    print(f"Referencias: {references_dir}")
+    print(f"Casos: {args.cases}; resolucoes: {args.resolutions}")
+    print(f"Threads: {args.threads}; schedules: {args.schedules}; chunks: {args.chunks}")
+    print(f"Repeticoes: {args.repeats}; total de execucoes: {total}")
+    print("=================================================")
 
     if args.dry_run:
-        print("\nConfiguracoes:")
-        numero = 0
-
+        i = 0
         for caso in args.cases:
             for resolucao in args.resolutions:
                 for threads in args.threads:
                     for schedule in args.schedules:
                         for chunk in args.chunks:
                             for repeticao in range(1, args.repeats + 1):
-                                numero += 1
-                                print(
-                                    f"{numero:4d}. "
-                                    f"{caso:8s} "
-                                    f"{resolucao:5d} "
-                                    f"{threads:3d} threads "
-                                    f"{schedule:7s},{chunk:<4d} "
-                                    f"rep={repeticao}"
-                                )
-
+                                i += 1
+                                print(f"{i:4d}. {caso} {resolucao}x{resolucao}, {threads} threads, {schedule},{chunk}, rep={repeticao}")
         return 0
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        manifesto = carregar_manifesto(references_dir)
+        referencias = {}
+        for caso in args.cases:
+            for resolucao in args.resolutions:
+                chave = (caso, resolucao)
+                if chave not in referencias:
+                    referencias[chave] = obter_referencia(references_dir, manifesto, caso, resolucao)
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"ERRO ao carregar referencias: {exc}", file=sys.stderr)
+        return 1
 
-    if args.logs_dir is not None:
-        args.logs_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        validar_csv_existente(output)
+    except ValueError as exc:
+        print(f"ERRO: {exc}", file=sys.stderr)
+        return 1
 
-    escrever_cabecalho = not args.output.exists() or args.output.stat().st_size == 0
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if logs_dir:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+    escrever_cabecalho = not output.exists() or output.stat().st_size == 0
 
-    with args.output.open(
-        "a",
-        newline="",
-        encoding="utf-8",
-    ) as arquivo_csv:
-
-        writer = csv.DictWriter(
-            arquivo_csv,
-            fieldnames=CSV_FIELDS,
-        )
-
+    with output.open("a", newline="", encoding="utf-8") as arquivo_csv:
+        writer = csv.DictWriter(arquivo_csv, fieldnames=CSV_FIELDS)
         if escrever_cabecalho:
             writer.writeheader()
 
         numero = 0
-
         for caso in args.cases:
             for resolucao in args.resolutions:
-                
-                """
-                Esse trecho de código específico entre é para
-                executar a versão serial de determinado 'teste base', isto é, com
-                os mesmos tipos de caso e resolucao (já que a versao serial nao tem 
-                configuracoes de threads ou schedules, entao nao tem porque fazer uma versao serial
-                pra cada um dos varios testes paralelos), e utiliza-los como medida pra
-                verificar tanto a corretude de cada um dos testes paralelos a seguir 
-                quanto o speedup em relacao a versao serial
-                """
-                tempo_serial, _, _ = executar_serial(
-                    executavel=args.serial_exe.resolve(),
-                    caso=caso,
-                    resolucao=resolucao,
-                    cwd=Path("./serial"),
-                    timeout=args.timeout,
-                )
-
-                
-
+                referencia = referencias[(caso, resolucao)]
                 print(
-                    f"\nReferencia serial: "
-                    f"{caso} | "
-                    f"{resolucao}x{resolucao} | "
-                    f"Tempo calculo: {tempo_serial:.6f} s"
+                    f"\nReferencia serial: {caso} {resolucao}x{resolucao} | "
+                    f"mediana={referencia['tempo_serial_mediana_s']:.6f} s | "
+                    f"MAX_ITER={referencia['max_iter']}"
                 )
 
                 for threads in args.threads:
                     for schedule in args.schedules:
                         for chunk in args.chunks:
                             for repeticao in range(1, args.repeats + 1):
-
                                 numero += 1
-
                                 print(
-                                    f"\n[{numero}/{total}] "
-                                    f"{caso} | "
-                                    f"{resolucao}x{resolucao} | "
-                                    f"{threads} threads | "
-                                    f"{schedule},{chunk} | "
-                                    f"repeticao {repeticao}"
+                                    f"\n[{numero}/{total}] {caso} {resolucao}x{resolucao} | "
+                                    f"{threads} threads | {schedule},{chunk} | rep={repeticao}/{args.repeats}"
                                 )
-
-                                arquivo_openmp = (
-                                    cwd
-                                    / "saida"
-                                    / nome_arquivo_saida(caso, resolucao)
-                                )
-
-                                if arquivo_openmp.exists():
-                                    arquivo_openmp.unlink()
-
+                                arquivo_saida = cwd / "saida" / nome_arquivo_binario(caso, resolucao)
+                                arquivo_saida.unlink(missing_ok=True)
                                 try:
-                                    resultado, stdout, stderr = executar(
-                                        executavel=executavel,
-                                        caso=caso,
-                                        resolucao=resolucao,
-                                        threads=threads,
-                                        schedule=schedule,
-                                        chunk=chunk,
-                                        repeticao=repeticao,
-                                        cwd=cwd,
-                                        timeout=args.timeout,
+                                    resultado, stdout, stderr = executar_openmp(
+                                        executavel, caso, resolucao, threads, schedule, chunk,
+                                        repeticao, cwd, args.timeout
                                     )
-
-                                    resultado["tempo_serial_s"] = tempo_serial
-                                    resultado["speedup"] = tempo_serial / resultado["tempo_calc_s"]
-
-                                    resultado["diferenca_percentual"] = (
-                                        (resultado["tempo_calc_s"] - tempo_serial)
-                                        / tempo_serial
-                                    ) * 100
-
-                                    arquivo_serial = (
-                                        Path("./serial")
-                                        / "saida"
-                                        / nome_arquivo_saida(caso, resolucao)
+                                    if resultado["max_iter"] != referencia["max_iter"]:
+                                        raise ValueError(
+                                            f"MAX_ITER do OpenMP ({resultado['max_iter']}) difere da referencia "
+                                            f"({referencia['max_iter']})."
+                                        )
+                                    diferentes, percentual, max_diferenca = comparar_binarios(
+                                        referencia["binario"], arquivo_saida
                                     )
-
-                                    arquivo_openmp = (
-                                        cwd
-                                        / "saida"
-                                        / nome_arquivo_saida(caso, resolucao)
-                                    )
-
-                                    (
-                                        pixels_diferentes,
-                                        percentual_erro,
-                                        diferenca_maxima,
-                                    ) = comparar_binarios(
-                                        arquivo_serial,
-                                        arquivo_openmp,
-                                    )
-
-                                    resultado["pixels_diferentes"] = pixels_diferentes
-                                    resultado["percentual_erro"] = percentual_erro
-                                    resultado["diferenca_maxima"] = diferenca_maxima
-                                except (
-                                    OSError,
-                                    subprocess.TimeoutExpired,
-                                    RuntimeError,
-                                    ValueError,
-                                ) as exc:
-                                    print(
-                                        f"ERRO na execucao {numero}: {exc}",
-                                        file=sys.stderr,
-                                    )
+                                    tempo_serial = referencia["tempo_serial_mediana_s"]
+                                    resultado.update({
+                                        "tempo_serial_s": tempo_serial,
+                                        "tempo_serial_min_s": referencia["tempo_serial_min_s"],
+                                        "tempo_serial_max_s": referencia["tempo_serial_max_s"],
+                                        "speedup": tempo_serial / resultado["tempo_calc_s"] if resultado["tempo_calc_s"] > 0 else "",
+                                        "diferenca_percentual": ((resultado["tempo_calc_s"] - tempo_serial) / tempo_serial * 100.0) if tempo_serial > 0 else "",
+                                        "pixels_diferentes": diferentes,
+                                        "percentual_erro": percentual,
+                                        "diferenca_maxima": max_diferenca,
+                                        "correto_exato": "SIM" if diferentes == 0 else "NAO",
+                                        "referencia_binario": referencia["arquivo_binario"],
+                                    })
+                                except (OSError, RuntimeError, ValueError, FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                                    print(f"ERRO na execucao {numero}: {exc}", file=sys.stderr)
                                     return 1
 
                                 writer.writerow(resultado)
                                 arquivo_csv.flush()
+                                print(f"  Tempo de calculo: {resultado['tempo_calc_s']:.6f} s")
+                                print(f"  Serial (mediana): {resultado['tempo_serial_s']:.6f} s")
+                                print(f"  Speedup: {resultado['speedup']:.4f}")
+                                print(f"  F_LB: {resultado['f_lb']:.6f}")
+                                print(f"  Corretude exata: {resultado['correto_exato']} ({diferentes} pixels diferentes)")
 
-                                print(
-                                    f"  Tempo calculo: "
-                                    f"{resultado['tempo_calc_s']:.6f} s"
-                                )
-                                print(
-                                    f"  Tempo I/O:     "
-                                    f"{resultado['tempo_io_s']:.6f} s"
-                                )
-                                print(
-                                    f"  F_LB:          "
-                                    f"{resultado['f_lb']:.6f}"
-                                )
+                                if logs_dir:
+                                    nome_base = f"{numero:04d}_{caso}_{resolucao}_{threads}t_{schedule}_{chunk}_rep{repeticao}"
+                                    (logs_dir / f"{nome_base}.out").write_text(stdout, encoding="utf-8")
+                                    (logs_dir / f"{nome_base}.err").write_text(stderr, encoding="utf-8")
 
-                                if args.logs_dir is not None:
-                                    nome_base = (
-                                        f"{numero:04d}_"
-                                        f"{caso}_"
-                                        f"{resolucao}_"
-                                        f"{threads}t_"
-                                        f"{schedule}_{chunk}_"
-                                        f"rep{repeticao}"
-                                    )
-
-                                    (args.logs_dir / f"{nome_base}.out").write_text(
-                                        stdout,
-                                        encoding="utf-8",
-                                    )
-
-                                    (args.logs_dir / f"{nome_base}.err").write_text(
-                                        stderr,
-                                        encoding="utf-8",
-                                    )
-
-    print("\n========================================")
-    print("Benchmark concluido.")
-    print(f"Resultados: {args.output}")
-    print("========================================")
-
+    print(f"\nBenchmark OpenMP concluido. CSV: {output}")
     return 0
 
 
