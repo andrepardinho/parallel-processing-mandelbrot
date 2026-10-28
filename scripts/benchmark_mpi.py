@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
+
 """Benchmark das estrategias MPI usando referencias seriais compartilhadas.
 
 Antes de executar, gere as referencias uma unica vez para cada combinação caso x resolução:
-    python3 gerar_referencias.py 
+    python3 ./scripts/gerar_referencias.py 
     --cases padrao cavalos \
-    --resolutions 4096 8192\
+    --resolutions 4096 8192 16384 \
     --repeats 5
 
 Exemplo de benchmark MPI:
@@ -17,7 +18,7 @@ Exemplo de benchmark MPI:
 
 Comparação de strategies MPI de tempo de calculo e tempo paralelo total
 (inclui o tempo de reorganização, mas não o tempo de I/O) 
-    python3 benchmark_mpi.py \
+    python3 ./scripts/benchmark_mpi.py \
         --processes 1 2 4 8 \
         --strategies bloco blocov intercaladov \
         --chunks 1 \
@@ -29,57 +30,57 @@ Comparação de strategies MPI de tempo de calculo e tempo paralelo total
 
 Strong scaling
 (segue os mesmos argumentos que o anterior, mas deverá ser comparado com o strong scaling do OMP):
-    python3 benchmark_mpi.py \
+    python3 ./scriptsbenchmark_mpi.py \
         --processes 1 2 4 8 \
         --strategies bloco blocov intercaladov \
         --chunks 1 \
         --cases padrao \
         --resolutions 4096 \
         --repeats 5 \
-        --output resultados/brutos/strong_scaling.csv
+        --output resultados/brutos/mpi_strong_scaling.csv
 
 Comparacao de strategies do MPI com chunk tamanho 1 no caso de desbalanceamento:
-    python3 benchmark_mpi.py \
+    python3 ./scripts/benchmark_mpi.py \
         --processes 8 \
         --strategies bloco blocov intercaladov \
         --chunks 1 \
         --cases cavalos \
         --resolutions 4096 \
         --repeats 5 \
-        --output resultados/brutos/strategies_cavalos_chunk_1.csv
+        --output resultados/brutos/mpi_strategies_cavalos_chunk_1.csv
 
 Comparacao de strategies (apenas intercaladov) por chunks no caso de desbalanceamento
 (deverá ser comparado com o teste de chunks de OMP):
-    python3 benchmark_mpi.py \
+    python3 ./scripts/benchmark_mpi.py \
         --processes 8 \
         --strategies intercaladov \
         --chunks 1 16 64 256 \
         --cases cavalos \
         --resolutions 4096 \
         --repeats 5 \
-        --output resultados/brutos/scheduling_cavalos.csv
+        --output resultados/brutos/mpi_scheduling_cavalos.csv
 
 Weak scaling
 (deverá ser comparado com o weak scaling do OMP):
-    python3 benchmark_mpi.py \
+    python3 ./scripts/benchmark_mpi.py \
         --processes 2 \
         --strategies bloco blocov intercaladov \
         --chunks 1 \
         --cases padrao \
         --resolutions 4096 \
         --repeats 5 \
-        --output resultados/brutos/weak_scaling.csv
+        --output resultados/brutos/mpi_weak_scaling.csv
 
 e
 
-    python3 benchmark_mpi.py \
+    python3 ./scripts/benchmark_mpi.py \
         --processes 8 \
         --strategies bloco blocov intercaladov \
         --chunks 1 \
         --cases padrao \
         --resolutions 8192 \
         --repeats 5 \
-        --output resultados/brutos/weak_scaling.csv
+        --output resultados/brutos/mpi_weak_scaling.csv
 
 O argumento --chunks so gera combinacoes adicionais para intercaladov.
 """
@@ -145,8 +146,12 @@ def parse_int(pattern, text, field):
 
 
 def executar_mpi(mpirun, executavel, caso, resolucao, estrategia, processos,
-                 chunk, cwd, timeout):
-    comando = [mpirun, "-np", str(processos), str(executavel), caso, str(resolucao), estrategia]
+                 chunk, cwd, timeout, use_hwthread_cpus=False):
+    comando = [mpirun]
+    if use_hwthread_cpus:
+        # Open MPI: conta processadores logicos (hardware threads) como slots.
+        comando.append("--use-hwthread-cpus")
+    comando.extend(["-np", str(processos), str(executavel), caso, str(resolucao), estrategia])
     if estrategia == "intercaladov":
         comando.append(str(chunk))
 
@@ -253,6 +258,8 @@ def main():
     parser.add_argument("--mpi-exe", type=Path, default=Path("./mpi/mandelbrot_mpi"),
                         help="Caminho do executavel MPI.")
     parser.add_argument("--mpirun", default="mpirun", help="Launcher MPI (mpirun ou mpiexec).")
+    parser.add_argument("--use-hwthread-cpus", action="store_true",
+                        help="Open MPI: considera processadores logicos como slots disponiveis.")
     parser.add_argument("--mpi-cwd", type=Path, default=Path("./mpi"),
                         help="Diretorio de execucao do MPI.")
     parser.add_argument("--references-dir", type=Path, default=Path("./referencias"),
@@ -305,6 +312,7 @@ def main():
     print("================ BENCHMARK MPI ================")
     print(f"Executavel MPI: {mpi_exe}")
     print(f"Launcher:      {mpirun_command}")
+    print(f"Usar hardware threads como slots: {args.use_hwthread_cpus}")
     print(f"Diretorio MPI: {mpi_cwd}")
     print(f"Referencias:   {references_dir}")
     print(f"Casos:         {args.cases}")
@@ -367,7 +375,7 @@ def main():
             try:
                 dados, stdout, stderr, arquivo_mpi = executar_mpi(
                     mpirun_command, mpi_exe, caso, resolucao, estrategia, nproc,
-                    chunk, mpi_cwd, args.timeout
+                    chunk, mpi_cwd, args.timeout, args.use_hwthread_cpus
                 )
                 if dados["max_iter"] != referencia["max_iter"]:
                     raise ValueError(

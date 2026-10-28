@@ -36,7 +36,7 @@ from referencias_mandelbrot import (
 )
 
 RE_TEMPO_CALC = re.compile(r"Tempo de calculo:\s*([0-9]+(?:\.[0-9]+)?)\s*s")
-RE_MAX_ITER = re.compile(r"MAX_ITER:\s*(\d+)")
+RE_MAX_ITER = re.compile(r"MAX_ITER\s*[:=]\s*(\d+)")
 
 
 def escrever_manifesto(diretorio_referencias: Path, linhas: dict[tuple[str, int], dict]) -> None:
