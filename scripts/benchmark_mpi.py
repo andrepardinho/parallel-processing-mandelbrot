@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Benchmark das estrategias MPI usando referencias seriais compartilhadas.
 
-Antes de executar, gere as referencias uma unica vez:
-    python3 gerar_referencias.py --cases padrao cavalos --resolutions 4096 --repeats 5
+Antes de executar, gere as referencias uma unica vez para cada combinação caso x resolução:
+    python3 gerar_referencias.py 
+    --cases padrao cavalos \
+    --resolutions 4096 8192\
+    --repeats 5
 
 Exemplo de benchmark MPI:
     python3 benchmark_mpi.py \
@@ -11,6 +14,72 @@ Exemplo de benchmark MPI:
         --processes 1 2 4 8 --strategies blocov intercaladov \
         --chunks 1 4 16 64 --cases padrao --resolutions 4096 \
         --repeats 5 --output resultados/brutos/mpi.csv
+
+Comparação de strategies MPI de tempo de calculo e tempo paralelo total
+(inclui o tempo de reorganização, mas não o tempo de I/O) 
+    python3 benchmark_mpi.py \
+        --processes 1 2 4 8 \
+        --strategies bloco blocov intercaladov \
+        --chunks 1 \
+        --cases padrao \
+        --resolutions 4096 \
+        --repeats 5 \
+        --output resultados/brutos/mpi_strategies_time.csv
+
+
+Strong scaling
+(segue os mesmos argumentos que o anterior, mas deverá ser comparado com o strong scaling do OMP):
+    python3 benchmark_mpi.py \
+        --processes 1 2 4 8 \
+        --strategies bloco blocov intercaladov \
+        --chunks 1 \
+        --cases padrao \
+        --resolutions 4096 \
+        --repeats 5 \
+        --output resultados/brutos/strong_scaling.csv
+
+Comparacao de strategies do MPI com chunk tamanho 1 no caso de desbalanceamento:
+    python3 benchmark_mpi.py \
+        --processes 8 \
+        --strategies bloco blocov intercaladov \
+        --chunks 1 \
+        --cases cavalos \
+        --resolutions 4096 \
+        --repeats 5 \
+        --output resultados/brutos/strategies_cavalos_chunk_1.csv
+
+Comparacao de strategies (apenas intercaladov) por chunks no caso de desbalanceamento
+(deverá ser comparado com o teste de chunks de OMP):
+    python3 benchmark_mpi.py \
+        --processes 8 \
+        --strategies intercaladov \
+        --chunks 1 16 64 256 \
+        --cases cavalos \
+        --resolutions 4096 \
+        --repeats 5 \
+        --output resultados/brutos/scheduling_cavalos.csv
+
+Weak scaling
+(deverá ser comparado com o weak scaling do OMP):
+    python3 benchmark_mpi.py \
+        --processes 2 \
+        --strategies bloco blocov intercaladov \
+        --chunks 1 \
+        --cases padrao \
+        --resolutions 4096 \
+        --repeats 5 \
+        --output resultados/brutos/weak_scaling.csv
+
+e
+
+    python3 benchmark_mpi.py \
+        --processes 8 \
+        --strategies bloco blocov intercaladov \
+        --chunks 1 \
+        --cases padrao \
+        --resolutions 8192 \
+        --repeats 5 \
+        --output resultados/brutos/weak_scaling.csv
 
 O argumento --chunks so gera combinacoes adicionais para intercaladov.
 """
