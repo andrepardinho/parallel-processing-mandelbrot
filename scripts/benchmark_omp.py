@@ -41,7 +41,7 @@ RE_TMAX = re.compile(r"T_max:\s*([0-9]+(?:\.[0-9]+)?)\s*s")
 RE_FLB = re.compile(r"Fator F_LB:\s*([0-9]+(?:\.[0-9]+)?)")
 RE_MAX_ITER = re.compile(r"MAX_ITER:\s*(\d+)")
 
-# As primeiras colunas mantem compatibilidade com analisar_resultados.py.
+# As primeiras colunas mantem compatibilidade com analisar_resultados_omp.py.
 CSV_FIELDS = [
     "data_hora", "executavel", "caso", "resolucao", "max_iter",
     "threads_solicitadas", "threads_utilizadas", "schedule_configurado",

@@ -8,17 +8,17 @@ Tipos de análise:
   weak   -> tempo por resolução, anotando as threads usadas
 
 Exemplos:
-  python3 scripts/analisar_resultados.py \
+  python3 scripts/analisar_resultados_omp.py \
       --tipo strong \
       --input resultados/brutos/strong_scaling.csv \
       --output-dir resultados/analise/strong
 
-  python3 scripts/analisar_resultados.py \
+  python3 scripts/analisar_resultados_omp.py \
       --tipo chunks \
       --input resultados/brutos/chunks.csv \
       --output-dir resultados/analise/chunks
 
-  python3 scripts/analisar_resultados.py \
+  python3 scripts/analisar_resultados_omp.py \
       --tipo weak \
       --input resultados/brutos/weak_scaling.csv \
       --output-dir resultados/analise/weak
@@ -369,9 +369,6 @@ def grafico_flb_tempo(rows, path):
     salvar_figura(path)
 
 
-# ---------------------------------------------------------------------------
-# Weak Scaling
-# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Weak Scaling
 # ---------------------------------------------------------------------------
