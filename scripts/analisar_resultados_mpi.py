@@ -2,10 +2,35 @@
 """Gera os nove gráficos comparativos dos benchmarks OpenMP e MPI.
 
 Exemplo:
-  python analisar_resultados_combinado.py \
+  python analisar_resultados_mpi.py \
     --omp-csv resultados/brutos/omp.csv \
     --mpi-csv resultados/brutos/mpi.csv \
     --output-dir resultados/analise_combinada
+
+Testes:
+
+python3 analisar_resultados_mpi.py \
+    --analysis mpi-tempo \
+    --mpi-csv resultados/brutos/mpi_strategies_time.csv
+
+python3 analisar_resultados_mpi.py \
+    --analysis strong \
+    --omp-csv resultados/brutos/omp_strong_scaling.csv \
+    --mpi-csv resultados/brutos/mpi_strong_scaling.csv
+
+python3 analisar_resultados_mpi.py \
+    --analysis cavalos-estrategias \
+    --mpi-csv resultados/brutos/mpi_strategies_cavalos_chunk_1.csv
+
+python3 analisar_resultados_mpi.py \
+    --analysis cavalos-chunks \
+    --omp-csv resultados/brutos/omp_chunks_cavalos.csv \
+    --mpi-csv resultados/brutos/mpi_scheduling_cavalos.csv
+
+python3 analisar_resultados_mpi.py \
+    --analysis weak \
+    --omp-csv resultados/brutos/omp_weak_scaling.csv \
+    --mpi-csv resultados/brutos/mpi_weak_scaling.csv
 
 Os CSVs brutos são agregados por configuração antes dos gráficos. Para os
 comparativos OpenMP/MPI, speedup e eficiência usam o tempo de cálculo, não o
@@ -143,12 +168,13 @@ def escolher_config(rows: list[dict], caso: str | None = None, resolucao: int | 
     return result
 
 
-def plot_mpi_tempo(mpi: list[dict], out: Path):
-    # Um arquivo por caso/resolução para não misturar tamanhos de problema.
+def plot_mpi_tempo(mpi: list[dict], out: Path, barras=False):
     configs = sorted({(r["caso"], r["resolucao"], r["max_iter"]) for r in mpi})
     for caso, res, max_iter in configs:
         rows = [r for r in mpi if (r["caso"], r["resolucao"], r["max_iter"]) == (caso, res, max_iter)]
-        fig, ax = plt.subplots(figsize=(9, 5.5))
+        fig, ax = plt.subplots(figsize=(10, 5.5))
+        series = []
+
         for strategy in ("bloco", "blocov", "intercaladov"):
             sr = [r for r in rows if r["estrategia"] == strategy and (strategy != "intercaladov" or r["chunk"] == 1)]
             by_worker = defaultdict(list)
@@ -157,10 +183,31 @@ def plot_mpi_tempo(mpi: list[dict], out: Path):
             if not by_worker:
                 continue
             xs = sorted(by_worker)
-            ax.plot(xs, [media(x["tempo_calc_media"] for x in by_worker[w]) for w in xs], marker="o", label=f"{strategy} — cálculo")
-            ax.plot(xs,[media(x["tempo_paralelo_media"] for x in by_worker[w]) for w in xs], marker="s", linestyle="--", label=f"{strategy} — paralelo total")
+            calc = [media(r["tempo_calc_media"] for r in by_worker[w]) for w in xs]
+            total = [media(r["tempo_paralelo_media"] for r in by_worker[w]) for w in xs]
+
+            if barras:
+                series.extend([(strategy, "cálculo", xs, calc), (strategy, "paralelo total", xs, total)])
+            else:
+                ax.plot(xs, calc, marker="o", label=f"{strategy} — cálculo")
+                ax.plot(xs, total, marker="s", linestyle="--", label=f"{strategy} — paralelo total")
+
+        if barras:
+            estrategias, tipos = ("bloco", "blocov", "intercaladov"), ("cálculo", "paralelo total")
+            x, largura = range(len(estrategias)), 0.35
+            for i, tipo in enumerate(tipos):
+                valores = [media(s) if (s := [v for nome, t, _, vals in series if nome == e and t == tipo for v in vals]) else 0 for e in estrategias]
+                ax.bar([p + (i - 0.5) * largura for p in x], valores, width=largura, label=tipo)
+            ax.set(xticks=list(x), xticklabels=estrategias)
+            ax.legend()
+
         ax.set(xlabel="Número de processos MPI", ylabel="Tempo médio (s)", title=f"MPI — cálculo e tempo paralelo total\n{nome_caso(caso)} — {res}×{res} — MAX_ITER={max_iter}")
-        ax.grid(True, alpha=.3); ax.legend(ncol=2)
+        ax.grid(axis="y" if barras else "both", alpha=.3)
+        ax.set_axisbelow(True)
+        handles, labels = ax.get_legend_handles_labels()
+        ordem = [0, 2, 4, 1, 3, 5]
+        ax.legend(*([handles[i] for i in ordem], [labels[i] for i in ordem]) if len(handles) == 6 else (handles, labels), ncol=2)
+        fig.tight_layout()
         salvar(fig, out / f"01_mpi_calculo_total_{caso}_{res}.png")
 
 def tempo_desempenho(r):
@@ -194,7 +241,10 @@ def plot_strong(combined: list[dict], out: Path):
                 else:
                     valores = [r[metric] for _, r in points]
 
-                ax.plot([w for w, _ in points], valores, marker="o", label=label)
+                if label.startswith("OpenMP"):
+                    ax.plot([w for w, _ in points], valores, marker="s", linestyle="--", label=label)
+                else:
+                    ax.plot([w for w, _ in points], valores, marker="o", linestyle="-", label=label)
             if ideal and series:
                 xs = sorted({w for _, points in series for w, _ in points})
                 ax.plot(xs, xs, "k--", alpha=.55, label="Ideal S(p)=p")
@@ -207,25 +257,22 @@ def plot_strong(combined: list[dict], out: Path):
 
 
 def plot_flb_cavalos(mpi: list[dict], out: Path):
-    rows = [r for r in mpi if r["caso"] == "cavalos" and r["estrategia"] in {"bloco", "blocov", "intercaladov"}
-            and (r["estrategia"] != "intercaladov" or r["chunk"] == 1)]
+    estrategias = ("bloco", "blocov", "intercaladov")
+    rows = [r for r in mpi if r["caso"] == "cavalos" and r["estrategia"] in estrategias]
     if not rows:
-        print("AVISO: gráfico 05 ignorado; não há dados MPI do caso 'cavalos'.", file=sys.stderr)
+        print("AVISO: gráfico 05 ignorado; não há dados MPI do caso 'cavalos' com chunk=1.", file=sys.stderr)
         return
-    configs = sorted({(r["resolucao"], r["max_iter"]) for r in rows})
-    for res, max_iter in configs:
+
+    for res, max_iter in sorted({(r["resolucao"], r["max_iter"]) for r in rows}):
         subset = [r for r in rows if r["resolucao"] == res and r["max_iter"] == max_iter]
+        valores = [media(v) if (v := [r["f_lb_media"] for r in subset if r["estrategia"] == e]) else 0 for e in estrategias]
+
         fig, ax = plt.subplots(figsize=(8.5, 5.2))
-        for strategy in ("bloco", "blocov", "intercaladov"):
-            sr = [r for r in subset if r["estrategia"] == strategy]
-            by_worker = defaultdict(list)
-            for r in sr: by_worker[r["workers"]].append(r["f_lb_media"])
-            if by_worker:
-                xs = sorted(by_worker)
-                ax.plot(xs, [media(by_worker[w]) for w in xs], marker="o", label=strategy)
-        ax.set(xlabel="Número de processos MPI", ylabel="Fator de balanceamento de carga (F_LB)",
-               title=f"F_LB por estratégia MPI — {nome_caso('cavalos')}\n{res}×{res} — MAX_ITER={max_iter}")
-        ax.grid(True, alpha=.3); ax.legend()
+        ax.bar(estrategias, valores)
+        ax.set(xlabel="Estratégia MPI", ylabel="Fator de balanceamento de carga (F_LB)", title=f"F_LB por estratégia MPI — {nome_caso('cavalos')}\n{res}×{res} — MAX_ITER={max_iter}")
+        ax.grid(axis="y", alpha=.3)
+        ax.set_axisbelow(True)
+        fig.tight_layout()
         salvar(fig, out / f"05_flb_cavalos_{res}.png")
 
 
@@ -254,7 +301,12 @@ def plot_chunks(combined: list[dict], out: Path):
                     valor = tempo_desempenho(r) if metric == "tempo_calc_media" else r[metric]
                     by_chunk[r["chunk"]].append(valor)
                 xs = sorted(by_chunk)
-                ax.plot(xs, [media(by_chunk[x]) for x in xs], marker="o", label=label)
+                if label.startswith("OpenMP"):
+                    ax.plot(xs, [media(by_chunk[x]) for x in xs],
+                            marker="s", linestyle="--", label=label)
+                else:
+                    ax.plot(xs, [media(by_chunk[x]) for x in xs],
+                            marker="o", linestyle="-", label=label)
             ax.set(xlabel="Tamanho do chunk", ylabel=ylabel,
                    title=f"{ylabel.split('(')[0].strip()} por chunk\n{nome_caso(caso)} — {res}×{res} — {workers} workers")
             ax.grid(True, alpha=.3); ax.legend(fontsize=8, ncol=2)
@@ -262,7 +314,14 @@ def plot_chunks(combined: list[dict], out: Path):
 
         fig, ax = plt.subplots(figsize=(9, 5.5))
         for label, sr in series:
-            ax.scatter([r["f_lb_media"] for r in sr], [tempo_desempenho(r) for r in sr], label=label)
+            if label.startswith("OpenMP"):
+                ax.scatter([r["f_lb_media"] for r in sr],
+                        [tempo_desempenho(r) for r in sr],
+                        marker="s", label=label)
+            else:
+                ax.scatter([r["f_lb_media"] for r in sr],
+                        [tempo_desempenho(r) for r in sr],
+                        marker="o", label=label)
             for r in sr:
                 ax.annotate(str(r["chunk"]),(r["f_lb_media"], tempo_desempenho(r)), xytext=(4, 4), textcoords="offset points", fontsize=8)
         ax.set(xlabel="Fator de balanceamento de carga (F_LB)", ylabel="Tempo médio de execução paralela (s)",
@@ -299,7 +358,10 @@ def plot_weak(combined: list[dict], out: Path, caso_alvo: str = "padrao"):
             points.append((res, media(tempo_desempenho(r) for r in selected), target_worker))
 
         if len(points) >= 2:
-            ax.plot([p[0] for p in points], [p[1] for p in points], marker="o", label=f"{paradigm} {strategy}")
+            if paradigm == "OpenMP":
+                ax.plot([p[0] for p in points], [p[1] for p in points], marker="s", linestyle="--", label=f"{paradigm} {strategy}")
+            else:
+                ax.plot([p[0] for p in points], [p[1] for p in points], marker="o", linestyle="-", label=f"{paradigm} {strategy}")
             for res, t, workers in points:
                 ax.annotate(f"{workers}", (res, t), xytext=(4, 4), textcoords="offset points", fontsize=7)
             plotted += 1
@@ -316,43 +378,64 @@ def plot_weak(combined: list[dict], out: Path, caso_alvo: str = "padrao"):
     salvar(fig, out / "09_weak_scaling_seis_estrategias.png")
 
 
+
 def main():
-    p = argparse.ArgumentParser(description="Gera os gráficos combinados dos benchmarks OpenMP e MPI.")
-    p.add_argument("--omp-csv", type=Path, required=True, help="CSV bruto do benchmark OpenMP")
+    p = argparse.ArgumentParser(description="Gera gráficos selecionados dos benchmarks OpenMP e MPI.")
+    p.add_argument("--analysis", required=True, choices=["mpi-tempo", "strong", "cavalos-estrategias", "cavalos-chunks", "weak"])
+    p.add_argument("--omp-csv", type=Path, help="CSV bruto do benchmark OpenMP")
     p.add_argument("--mpi-csv", type=Path, required=True, help="CSV bruto do benchmark MPI")
     p.add_argument("--output-dir", type=Path, default=Path("resultados/analise_combinada"))
-    p.add_argument("--weak-case", choices=["padrao", "cavalos"], default="padrao")
     args = p.parse_args()
+
+    analises_com_omp = {"strong", "cavalos-chunks", "weak"}
+    if args.analysis in analises_com_omp and args.omp_csv is None:
+        p.error(f"A análise '{args.analysis}' exige --omp-csv.")
+
     try:
-        omp_raw = ler_csv(args.omp_csv, OMP_REQUIRED)
         mpi_raw = ler_csv(args.mpi_csv, MPI_REQUIRED)
-        all_raw = normalizar(omp_raw, mpi_raw)
-        combined = agregar(all_raw)
-        out = args.output_dir.expanduser().resolve() / "graficos"
+        omp_raw = ler_csv(args.omp_csv, OMP_REQUIRED) if args.analysis in analises_com_omp else []
+        combined = agregar(normalizar(omp_raw, mpi_raw))
+        base = args.output_dir.expanduser().resolve() / args.analysis
+        out = base / "graficos"
         out.mkdir(parents=True, exist_ok=True)
-        # Primeiro gráfico compara o tempo de cálculo com o tempo paralelo total do MPI.
-        plot_mpi_tempo([r for r in combined if r["paradigma"] == "MPI"], out)
-        plot_strong(combined, out)
-        plot_flb_cavalos([r for r in combined if r["paradigma"] == "MPI"], out)
-        plot_chunks(combined, out)
-        plot_weak(combined, out, args.weak_case)
-        # Exporta uma tabela normalizada/agregada para conferência e reutilização.
+        mpi = [r for r in combined if r["paradigma"] == "MPI"]
+
+        if args.analysis == "mpi-tempo":
+            plot_mpi_tempo(mpi, out)
+        elif args.analysis == "strong":
+            plot_strong(combined, out)
+        elif args.analysis == "cavalos-estrategias":
+            rows = [r for r in mpi if r["caso"] == "cavalos"]
+            if not rows:
+                raise ValueError("O CSV MPI não contém resultados do caso 'cavalos'.")
+            plot_mpi_tempo(rows, out, barras=True)
+            plot_flb_cavalos(rows, out)
+        elif args.analysis == "cavalos-chunks":
+            rows = [r for r in combined if r["caso"] == "cavalos"]
+            if not rows:
+                raise ValueError("Os CSVs não contêm resultados do caso 'cavalos'.")
+            plot_chunks(rows, out)
+        elif args.analysis == "weak":
+            plot_weak(combined, out, "padrao")
+
         columns = ["paradigma", "caso", "resolucao", "max_iter", "workers", "estrategia", "chunk",
-           "n_repeticoes", "tempo_serial_media", "tempo_calc_media", "tempo_paralelo_media",
-           "tempo_total_media", "speedup_media", "eficiencia", "f_lb_media"]
-        csv_out = args.output_dir.expanduser().resolve() / "resultados_agregados_combinados.csv"
-        csv_out.parent.mkdir(parents=True, exist_ok=True)
+                   "n_repeticoes", "tempo_serial_media", "tempo_calc_media", "tempo_paralelo_media",
+                   "tempo_total_media", "speedup_media", "eficiencia", "f_lb_media"]
+        csv_out = base / "resultados_agregados.csv"
         with csv_out.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=columns)
             writer.writeheader()
             for r in combined:
-                writer.writerow({k: (f"{r[k]:.10f}" if isinstance(r.get(k), float) and math.isfinite(r[k]) else r.get(k, "")) for k in columns})
+                writer.writerow({k: f"{r[k]:.10f}" if isinstance(r.get(k), float) and math.isfinite(r[k]) else r.get(k, "") for k in columns})
+
     except (OSError, ValueError, csv.Error) as exc:
         print(f"ERRO: {exc}", file=sys.stderr)
         return 1
+
     print(f"Análise concluída. Gráficos: {out}")
     print(f"CSV agregado: {csv_out}")
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())
