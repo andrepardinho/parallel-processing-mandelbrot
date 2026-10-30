@@ -196,7 +196,7 @@ def plot_mpi_tempo(mpi: list[dict], out: Path, barras=False):
             estrategias, tipos = ("bloco", "blocov", "intercaladov"), ("cálculo", "paralelo total")
             x, largura = range(len(estrategias)), 0.35
             for i, tipo in enumerate(tipos):
-                valores = [media(s) if (s := [v for nome, t, _, vals in series if nome == e and t == tipo for v in vals]) else 0 for e in estrategias]
+                valores = [next((vals[0] for nome, t, _, vals in series if nome == e and t == tipo and vals), 0) for e in estrategias]
                 ax.bar([p + (i - 0.5) * largura for p in x], valores, width=largura, label=tipo)
             ax.set(xticks=list(x), xticklabels=estrategias)
             ax.legend()
